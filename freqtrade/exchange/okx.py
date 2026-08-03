@@ -90,7 +90,7 @@ class Okx(Exchange):
         Must be overridden in child methods if required.
         """
         try:
-            if self.trading_mode == TradingMode.FUTURES and not self._config["dry_run"]:
+            if self.trading_mode == TradingMode.FUTURES:
                 accounts = self._api.fetch_accounts()
                 self._log_exchange_response("fetch_accounts", accounts)
                 if len(accounts) > 0:
