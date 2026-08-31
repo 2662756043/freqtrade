@@ -54,6 +54,7 @@ class Binance(Exchange):
     _ft_has_futures: FtHas = {
         "ohlcv_candle_limit": 499,
         "funding_fee_candle_limit": 1000,
+        "open_interest_candle_limit": 500,
         "stoploss_order_types": {"limit": "stop", "market": "stop_market"},
         "stoploss_blocks_assets": False,  # Stoploss orders do not block assets
         "stoploss_query_requires_stop_flag": True,
@@ -167,7 +168,7 @@ class Binance(Exchange):
         """
         Overwrite to introduce "fast new pair" functionality by detecting the pair's listing date
         Does not work for other exchanges, which don't return the earliest data when called with "0"
-        :param candle_type: Any of the enum CandleType (must match trading mode!)
+        :param candle_type: Candle type to use (spot, futures, funding_rate, ...)
         """
         if is_new_pair and candle_type in (CandleType.SPOT, CandleType.FUTURES, CandleType.MARK):
             with self._loop_lock:
