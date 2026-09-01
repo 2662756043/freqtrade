@@ -38,7 +38,7 @@ from freqtrade.enums import (
     State,
     TradingMode,
 )
-from freqtrade.exceptions import ExchangeError, PricingError
+from freqtrade.exceptions import DependencyException, ExchangeError, PricingError
 from freqtrade.exchange import Exchange, timeframe_to_minutes, timeframe_to_msecs
 from freqtrade.exchange.exchange_utils import price_to_precision
 from freqtrade.ft_types import AnnotationType
@@ -1019,6 +1019,30 @@ class RPC:
 
         self._freqtrade.handle_onexchange_order(trade)
         return {"status": "Reloaded from orders from exchange"}
+
+    def _rpc_adjust_margin(self, trade_id: int, amount: float) -> dict[str, str]:
+        """
+        Handler for margin adjustment of an isolated futures position.
+        Positive amounts add margin (moving the liquidation price away from the
+        current price), negative amounts remove margin from the position.
+        """
+        if self._freqtrade.state == State.STOPPED:
+            raise RPCException("trader is not running")
+        if amount == 0:
+            raise RPCException("Margin adjustment amount must not be 0.")
+
+        try:
+            trade = self._freqtrade.adjust_trade_margin(trade_id, amount)
+        except DependencyException as e:
+            raise RPCException(str(e)) from e
+
+        action = "Added" if amount > 0 else "Removed"
+        return {
+            "status": (
+                f"{action} {abs(amount)} margin for trade #{trade_id} ({trade.pair}). "
+                f"Liquidation price is now {trade.liquidation_price}."
+            )
+        }
 
     def __exec_force_exit(
         self,

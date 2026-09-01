@@ -435,6 +435,12 @@ class ForceExitPayload(BaseModel):
     price: float | None = None
 
 
+class MarginAdjustPayload(BaseModel):
+    amount: float = Field(
+        description="Margin amount to adjust. Positive adds margin, negative removes margin."
+    )
+
+
 class BlacklistPayload(BaseModel):
     blacklist: list[str]
 

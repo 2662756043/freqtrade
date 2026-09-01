@@ -3895,6 +3895,104 @@ class Exchange:
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
 
+    def _modify_margin(
+        self,
+        pair: str,
+        amount: float,
+        type_: str,
+        side: BuySell | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
+        """
+        Add or reduce margin of an existing isolated futures position.
+        :param pair: Market to adjust the margin for
+        :param amount: Amount to add/reduce, denominated in the margin currency (e.g. USDT)
+        :param type_: "add" or "reduce"
+        :param side: Position side ("buy" for long, "sell" for short) - exchange specific need
+        :param params: Extra parameters handed over to ccxt
+        """
+        if amount <= 0:
+            raise OperationalException(f"Margin amount must be positive, got {amount}.")
+        if self.trading_mode != TradingMode.FUTURES:
+            raise OperationalException(
+                f"Margin adjustment is only supported in futures mode, not {self.trading_mode}."
+            )
+        if self.margin_mode != MarginMode.ISOLATED:
+            raise OperationalException(
+                f"Margin adjustment is only supported for isolated positions, not {self.margin_mode}."
+            )
+        if self._config["dry_run"] or not self.exchange_has("addMargin"):
+            logger.warning(
+                f"Cannot {type_} margin for {pair}: not supported in dry-run "
+                f"or unsupported by {self.name}."
+            )
+            return None
+
+        api_method = self._api.add_margin if type_ == "add" else self._api.reduce_margin
+        try:
+            res = api_method(symbol=pair, amount=float(amount), params=params or {})
+            self._log_exchange_response(f"{type_}_margin", res)
+            return res
+        except TypeError as e:
+            # ccxt 4.5.x: okx.parse_margin_modification() assigns 'type': type['type'] while
+            # `type` is a plain string -> TypeError. The request did reach the exchange and was
+            # applied, only the unified-response parsing blew up.
+            logger.warning(
+                f"ccxt could not parse the {type_}_margin response for {pair} ({e}). "
+                "The request was most likely applied - refresh the position to verify."
+            )
+            return None
+        except ccxt.DDoSProtection as e:
+            raise DDosProtection(e) from e
+        except ccxt.InsufficientFunds as e:
+            raise TemporaryError(
+                f"Could not {type_} margin for {pair} due to {e.__class__.__name__}. Message: {e}"
+            ) from e
+        except (ccxt.BadRequest, ccxt.OperationRejected, ccxt.OperationFailed, ccxt.ExchangeError) as e:
+            # e.g. OKX 59301 "exceeds the maximum limit" - retrying won't help.
+            raise OperationalException(
+                f"Could not {type_} margin for {pair} due to {e.__class__.__name__}. Message: {e}"
+            ) from e
+        except ccxt.BaseError as e:
+            raise OperationalException(e) from e
+
+    @retrier
+    def add_margin(
+        self,
+        pair: str,
+        amount: float,
+        side: BuySell | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
+        """
+        Add margin to an existing isolated position, moving the liquidation price
+        further away from the current price.
+        :param pair: Market to add margin to
+        :param amount: Amount of margin to add, in the margin currency (e.g. USDT)
+        :param side: Position side ("buy" for long, "sell" for short)
+        :param params: Extra parameters handed over to ccxt
+        """
+        return self._modify_margin(pair, amount, "add", side, params)
+
+    @retrier
+    def reduce_margin(
+        self,
+        pair: str,
+        amount: float,
+        side: BuySell | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
+        """
+        Remove margin from an existing isolated position, moving the liquidation price
+        closer to the current price.
+        Reducing is capped by the exchange (resulting leverage may not exceed the set leverage).
+        :param pair: Market to reduce margin from
+        :param amount: Amount of margin to remove, in the margin currency (e.g. USDT)
+        :param side: Position side ("buy" for long, "sell" for short)
+        :param params: Extra parameters handed over to ccxt
+        """
+        return self._modify_margin(pair, amount, "reduce", side, params)
+
     def _fetch_and_calculate_funding_fees(
         self,
         pair: str,

@@ -19,8 +19,9 @@ def update_liquidation_prices(
     dry_run: bool = False,
 ):
     """
-    Update trade liquidation price in isolated margin mode.
-    Updates liquidation price for all trades in cross margin mode.
+    Update trade liquidation price.
+    Isolated margin mode: updates the given trade, or all open trades if trade is None.
+    Cross margin mode: always updates all open trades (they share the wallet as collateral).
     """
     try:
         if exchange.margin_mode == MarginMode.CROSS:
@@ -49,21 +50,24 @@ def update_liquidation_prices(
                             open_trades=open_trades,
                         )
                     )
-        elif trade:
-            trade.set_liquidation_price(
-                exchange.get_liquidation_price(
-                    pair=trade.pair,
-                    open_rate=trade.open_rate,
-                    is_short=trade.is_short,
-                    amount=trade.amount,
-                    stake_amount=trade.stake_amount,
-                    leverage=trade.leverage,
-                    wallet_balance=trade.stake_amount,
-                )
-            )
         else:
-            raise DependencyException(
-                "Trade object is required for updating liquidation price in isolated margin mode."
-            )
+            # Isolated margin mode - every position is collateralized on its own.
+            # Without an explicit trade, refresh all open trades (allows periodic refresh,
+            # e.g. after margin was added to a position outside of an order fill).
+            trades = [trade] if trade else Trade.get_open_trades()
+            for t in trades:
+                if not t.has_open_position:
+                    continue
+                t.set_liquidation_price(
+                    exchange.get_liquidation_price(
+                        pair=t.pair,
+                        open_rate=t.open_rate,
+                        is_short=t.is_short,
+                        amount=t.amount,
+                        stake_amount=t.stake_amount,
+                        leverage=t.leverage,
+                        wallet_balance=t.stake_amount,
+                    )
+                )
     except DependencyException:
         logger.warning("Unable to calculate liquidation price")

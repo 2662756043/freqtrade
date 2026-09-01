@@ -21,6 +21,7 @@ from freqtrade.rpc.api_server.api_schemas import (
     ListCustomData,
     Locks,
     LocksPayload,
+    MarginAdjustPayload,
     MixTag,
     OpenTradeSchema,
     PairCandlesRequest,
@@ -198,6 +199,19 @@ def trade_cancel_open_order(tradeid: int, rpc: RPC = Depends(get_rpc)):
 @router.post("/trades/{tradeid}/reload", response_model=OpenTradeSchema, tags=["Trades"])
 def trade_reload(tradeid: int, rpc: RPC = Depends(get_rpc)):
     rpc._rpc_reload_trade_from_exchange(tradeid)
+    return rpc._rpc_trade_status([tradeid])[0]
+
+
+@router.post("/trades/{tradeid}/margin", response_model=OpenTradeSchema, tags=["Trades"])
+def trade_adjust_margin(
+    tradeid: int, payload: MarginAdjustPayload, rpc: RPC = Depends(get_rpc)
+):
+    """
+    Add or remove margin of an isolated futures position.
+    Positive amounts add margin (liquidation price moves away from the current price),
+    negative amounts remove margin from the position.
+    """
+    rpc._rpc_adjust_margin(tradeid, payload.amount)
     return rpc._rpc_trade_status([tradeid])[0]
 
 

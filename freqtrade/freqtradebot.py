@@ -392,14 +392,73 @@ class FreqtradeBot(LoggingMixin):
         return max(0, self.config["max_open_trades"] - open_trades)
 
     def update_all_liquidation_prices(self) -> None:
-        if self.trading_mode == TradingMode.FUTURES and self.margin_mode == MarginMode.CROSS:
-            # Update liquidation prices for all trades in cross margin mode
+        if self.trading_mode == TradingMode.FUTURES:
+            # Cross: all trades share the wallet as collateral and must be refreshed together.
+            # Isolated: refresh every open trade, so that margin added outside of an order fill
+            # (e.g. via add_margin) is picked up as well.
             update_liquidation_prices(
                 exchange=self.exchange,
                 wallets=self.wallets,
                 stake_currency=self.config["stake_currency"],
                 dry_run=self.config["dry_run"],
             )
+
+    def adjust_trade_margin(self, trade_id: int, amount: float) -> Trade:
+        """
+        Add margin to (amount > 0) or remove margin from (amount < 0) an open,
+        isolated futures position. Moves the liquidation price away from / towards
+        the current price without changing the position size.
+        :param trade_id: Id of the trade to adjust
+        :param amount: Amount in the margin currency (e.g. USDT) - positive adds, negative reduces
+        :return: The adjusted trade
+        """
+        if self.trading_mode != TradingMode.FUTURES:
+            raise DependencyException(
+                f"Margin adjustment is only supported in futures mode, not {self.trading_mode}."
+            )
+        if self.margin_mode != MarginMode.ISOLATED:
+            raise DependencyException(
+                f"Margin adjustment is only supported for isolated positions, not {self.margin_mode}."
+            )
+        if amount == 0:
+            raise DependencyException("Margin adjustment amount must not be 0.")
+
+        trade = Trade.get_trades(
+            trade_filter=[Trade.id == trade_id, Trade.is_open.is_(True)]
+        ).first()
+        if not trade:
+            raise DependencyException(f"Could not find open trade with id {trade_id}.")
+        if not trade.has_open_position:
+            raise DependencyException(f"Trade {trade_id} ({trade.pair}) has no open position.")
+
+        amount_abs = abs(amount)
+        if amount > 0:
+            available = self.wallets.get_available_stake_amount()
+            if amount_abs > available:
+                raise DependencyException(
+                    f"Not enough available balance to add {amount_abs} "
+                    f"{self.config['stake_currency']} to trade {trade_id} - "
+                    f"only {available} available."
+                )
+            self.exchange.add_margin(trade.pair, amount_abs, side=trade.entry_side)
+        else:
+            self.exchange.reduce_margin(trade.pair, amount_abs, side=trade.entry_side)
+
+        self.wallets.update()
+        update_liquidation_prices(
+            trade,
+            exchange=self.exchange,
+            wallets=self.wallets,
+            stake_currency=self.config["stake_currency"],
+            dry_run=self.config["dry_run"],
+        )
+        Trade.commit()
+        logger.info(
+            f"{'Added' if amount > 0 else 'Removed'} {amount_abs} "
+            f"{self.config['stake_currency']} margin for trade {trade_id} ({trade.pair}). "
+            f"Liquidation price is now {trade.liquidation_price}."
+        )
+        return trade
 
     def update_funding_fees(self) -> None:
         if self.trading_mode == TradingMode.FUTURES:

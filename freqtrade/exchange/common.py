@@ -100,6 +100,8 @@ EXCHANGE_HAS_OPTIONAL_FUTURES: dict[str, list[str]] = {
     # private
     "setLeverage": [],  # Margin/Futures trading
     "setMarginMode": [],  # Margin/Futures trading
+    "addMargin": [],  # Add margin to an isolated position
+    "reduceMargin": [],  # Remove margin from an isolated position
     "fetchFundingHistory": [],  # Futures trading
     # Public
     "fetchFundingRateHistory": [],  # Futures trading

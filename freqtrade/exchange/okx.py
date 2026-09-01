@@ -97,6 +97,12 @@ class Okx(Exchange):
                     self.net_only = accounts[0].get("info", {}).get("posMode") == "net_mode"
         except ccxt.DDoSProtection as e:
             raise DDosProtection(e) from e
+        except ccxt.AuthenticationError as e:
+            logger.warning(
+                "AuthenticationError in additional_exchange_init (likely dry_run/backtest). "
+                "Skipping account mode detection, defaulting to net_only=True. Message: %s", e
+            )
+            self.net_only = True
         except (ccxt.OperationFailed, ccxt.ExchangeError) as e:
             raise TemporaryError(
                 f"Error in additional_exchange_init due to {e.__class__.__name__}. Message: {e}"
@@ -135,6 +141,7 @@ class Okx(Exchange):
         return params
 
     def __fetch_leverage_already_set(self, pair: str, leverage: float, side: BuySell) -> bool:
+        res_lev = {}
         try:
             res_lev = self._api.fetch_leverage(
                 symbol=pair,
@@ -144,11 +151,29 @@ class Okx(Exchange):
                 },
             )
             self._log_exchange_response("get_leverage", res_lev)
-            already_set = all(float(x["lever"]) == leverage for x in res_lev["data"])
-            return already_set
+            # Newer ccxt returns a parsed leverage structure:
+            #   {'info': [...], 'longLeverage': int, 'shortLeverage': int}
+            # Older ccxt returns the raw response: {'data': [...]}
+            data = res_lev.get("info") or res_lev.get("data") or []
+            if data:
+                already_set = all(float(x.get("lever")) == leverage for x in data)
+            else:
+                already_set = (
+                    res_lev.get("longLeverage") == int(leverage)
+                    or res_lev.get("shortLeverage") == int(leverage)
+                )
+            return bool(already_set)
 
         except ccxt.BaseError:
             # Assume all errors as "not set yet"
+            return False
+        except (KeyError, TypeError, ValueError):
+            # Unexpected response structure: never crash the bot, assume not set
+            logger.warning(
+                "Unexpected leverage response structure for %s: %s",
+                pair,
+                res_lev if res_lev else "empty response",
+            )
             return False
 
     @retrier
@@ -175,6 +200,62 @@ class Okx(Exchange):
                     ) from e
             except ccxt.BaseError as e:
                 raise OperationalException(e) from e
+
+    def __get_position_side(self, pair: str) -> BuySell:
+        """
+        Infer the position side from open positions.
+        Only needed in hedge mode (net_only=False), where margin calls require posSide.
+        """
+        try:
+            for pos in self.fetch_positions(pair):
+                if float(pos.get("contracts") or 0) == 0:
+                    continue
+                if pos.get("side") == "long":
+                    return "buy"
+                if pos.get("side") == "short":
+                    return "sell"
+        except (ccxt.BaseError, KeyError, TypeError, ValueError) as e:
+            logger.warning("Could not determine position side for %s: %s", pair, e)
+        # Fall back to long - the exchange will reject the call if this is wrong.
+        return "buy"
+
+    def _get_margin_params(
+        self, pair: str, side: BuySell | None, params: dict | None
+    ) -> dict:
+        """
+        OKX requires posSide (net / long / short) on margin calls.
+        Passing "net" while the account is in hedge mode results in
+        "59300 - Margin call failed. Position does not exist".
+        """
+        params = dict(params or {})
+        if "posSide" not in params:
+            pos_side = side if side is not None else self.__get_position_side(pair)
+            params["posSide"] = self._get_posSide(pos_side, False)
+        return params
+
+    @retrier
+    def add_margin(
+        self,
+        pair: str,
+        amount: float,
+        side: BuySell | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
+        return self._modify_margin(
+            pair, amount, "add", side, self._get_margin_params(pair, side, params)
+        )
+
+    @retrier
+    def reduce_margin(
+        self,
+        pair: str,
+        amount: float,
+        side: BuySell | None = None,
+        params: dict | None = None,
+    ) -> dict | None:
+        return self._modify_margin(
+            pair, amount, "reduce", side, self._get_margin_params(pair, side, params)
+        )
 
     def get_max_pair_stake_amount(self, pair: str, price: float, leverage: float = 1.0) -> float:
         if self.trading_mode == TradingMode.SPOT:
