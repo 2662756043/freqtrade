@@ -7,6 +7,7 @@
       x84  : NostalgiaForInfinityX8_4        (NostalgiaForInfinityX8_4.py;
              官方 X8 + 每仓 80% 仓位, 留 20% 给 DCA 补仓, 固定 4x 杠杆, 默认)
 - 飞书卡片由 config 的 add_config_files 引入 (feishu_cards.json), 启动前连通性检查随 config 的 sandbox / 模拟盘头
+- 启动卡片只由 freqtrade 发送: rpc/webhook.py 已合并多条 startup 为 1 条, 脚本不再另发(否则会收 2 张)
 - 启动前检测 OKX 连通性 (跟随 config 的 sandbox 开关)
 - Linux 后台: 用 start_new_session (setsid) 真正脱离终端, 关掉 SSH 后 bot 继续运行
 - Windows 后台: 用 pythonw + DETACHED_PROCESS 无窗口
@@ -245,36 +246,6 @@ def remove_pid(short):
         pass
 
 
-def notify_startup(cfg, strategy):
-    """启动后只发一条飞书卡片。
-    原因: freqtrade 自身 startup_messages 会连发 2 条 STARTUP 消息(概览 + Searching for pairs),
-    无法用配置只保留一条; 故这里去掉 config 里的 startup 模板, 改由脚本发送, 保证只收到 1 条。"""
-    wh = cfg.get("webhook", {})
-    if not wh.get("enabled") or not wh.get("url"):
-        print("[start_nfix8] 未启用 webhook, 跳过飞书启动通知")
-        return
-    card = {
-        "msg_type": "interactive",
-        "card": {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": "🚀 机器人启动"},
-                "template": "green",
-            },
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": f"**策略**  {strategy}"}},
-                {"tag": "div", "text": {"tag": "lark_md", "content": "✅ 机器人已启动"}},
-            ],
-        },
-    }
-    try:
-        import requests
-        resp = requests.post(wh["url"], json=card, timeout=10)
-        print(f"[start_nfix8] 飞书启动通知已发送 (HTTP {resp.status_code}) {resp.text[:120]}")
-    except Exception as e:
-        print(f"[start_nfix8] 飞书启动通知发送失败: {e}")
-
-
 def start_bot(strategy, short):
     pid = read_pid(short)
     if pid and is_pid_alive(pid):
@@ -312,34 +283,37 @@ def start_bot(strategy, short):
     # PYTHONUTF8=1: 让 freqtrade 以 UTF-8 读取配置 (Windows 默认 GBK 会导致含中文/emoji 的 config 启动崩溃)
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
+    # 只写一行启动分隔线; 日志本体由 freqtrade 的 --logfile 负责写入
+    # (若把 stdout 也重定向到同一个 logfile, 会与 freqtrade 的 file handler 形成两个独立
+    #  文件句柄、各自维护偏移量, 导致日志交错/重复甚至互相覆盖)
     with open(logfile, "a", encoding="utf-8") as lf:
         lf.write(f"\n===== NFI X8({short}) 后台启动 {datetime.datetime.now()} =====\n")
-        if os.name == "nt":
-            proc = subprocess.Popen(
-                cmd,
-                stdout=lf,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                env=env,
-                cwd=BASE,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-            )
-        else:
-            # Linux: start_new_session=True 相当于 setsid, 让 bot 脱离终端, 关掉 SSH 后继续运行
-            proc = subprocess.Popen(
-                cmd,
-                stdout=lf,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                env=env,
-                cwd=BASE,
-                start_new_session=True,
-            )
+    if os.name == "nt":
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            env=env,
+            cwd=BASE,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+        )
+    else:
+        # Linux: start_new_session=True 相当于 setsid, 让 bot 脱离终端, 关掉 SSH 后继续运行
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            env=env,
+            cwd=BASE,
+            start_new_session=True,
+        )
     write_pid(short, proc.pid)
     print(f"[start_nfix8] 已后台启动 -> 策略={strategy}  PID={proc.pid}")
     print(f"[start_nfix8] 日志: {logfile}")
-    # 只发一条启动通知(替代 freqtrade 自带的两条 startup 推送)
-    notify_startup(cfg, strategy)
+    # 启动卡片由 freqtrade 自己发: rpc/webhook.py 已把多条 startup 合并成 1 条,
+    # 故脚本不再重复发送, 否则飞书会收到 2 张启动卡
     if os.name == "nt":
         print(f"[start_nfix8] 停止: python start_nfix8_demo.py stop -s {short}")
     else:
