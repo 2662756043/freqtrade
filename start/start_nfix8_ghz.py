@@ -192,10 +192,13 @@ def check_okx(cfg):
 
 def resolve_strategy(arg):
     key = (arg or "x84").strip().lower()
-    if key not in STRATEGY_MAP:
-        print(f"[start_nfix8] 未知 --strategy 值: {arg}, 可选: x84(默认,NostalgiaForInfinityX8_4) / x8(原版)")
-        sys.exit(2)
-    return STRATEGY_MAP[key]
+    if key in STRATEGY_MAP:
+        return STRATEGY_MAP[key]
+    # 允许直接用实例 short(nfix8 / nfix8_4) 作 -s 来 stop/status, 此时策略类无关紧要
+    if key in {v.lower() for v in SHORT_MAP.values()}:
+        return STRATEGY_MAP["x84"]
+    print(f"[start_nfix8] 未知 --strategy 值: {arg}, 可选: x84(默认,NostalgiaForInfinityX8_4) / x8(原版) / nfix8 / nfix8_4(实例标识)")
+    sys.exit(2)
 
 
 def is_pid_alive(pid):
