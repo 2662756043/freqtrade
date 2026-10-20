@@ -75,16 +75,35 @@ def pid_path(short):
 
 
 def find_pythonw():
-    """跨平台取解释器: Windows 优先 pythonw (无窗口); Linux 直接用当前解释器 (python3)。"""
+    """跨平台取 venv 内的解释器; 等价于在 shell 里先激活项目虚拟环境后再启动:
+        Linux  : source .venv/bin/activate  -> 用 .venv/bin/python (或 python3)
+        Windows: .venv\\Scripts\\activate    -> 用 .venv\\Scripts\\pythonw.exe (无窗口, 优先) / python.exe
+    优先使用 BASE/.venv 下的解释器; 找不到时退回 sys.executable 并打印警告。"""
     if os.name == "nt":
-        cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-        if os.path.exists(cand):
-            return cand
+        candidates = [
+            os.path.join(BASE, ".venv", "Scripts", "pythonw.exe"),
+            os.path.join(BASE, ".venv", "Scripts", "python.exe"),
+            os.path.join(os.path.dirname(sys.executable), "pythonw.exe"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
         found = shutil.which("pythonw.exe")
         if found:
             return found
-        print("[start_nfix8] 未找到 pythonw.exe, 退回用当前 python 启动 (会显示窗口)")
+        print("[start_nfix8] 未找到 .venv\\Scripts, 退回用当前 python 启动 (会显示窗口)")
         return sys.executable
+    # Linux / POSIX
+    candidates = [
+        os.path.join(BASE, ".venv", "bin", "python"),
+        os.path.join(BASE, ".venv", "bin", "python3"),
+        os.path.join(os.path.dirname(sys.executable), "python"),
+        os.path.join(os.path.dirname(sys.executable), "python3"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    print("[start_nfix8] 未找到 .venv/bin, 退回用当前 python 启动")
     return sys.executable
 
 
@@ -275,13 +294,15 @@ def start_bot(strategy, short):
     today = datetime.date.today().strftime("%Y-%m-%d")
     logfile = os.path.join(LOG_DIR, f"freqtrade_{short}_{today}.log")
 
+    py = find_pythonw()
     cmd = [
-        find_pythonw(), "-m", "freqtrade", "trade",
+        py, "-m", "freqtrade", "trade",
         "--config", cfg_to_use,
         "--strategy", strategy,
         "--strategy-path", STRATEGY_DIR,
         "--logfile", logfile,
     ]
+    print(f"[start_nfix8] 启动解释器(venv): {py}")
 
     # PYTHONUTF8=1: 让 freqtrade 以 UTF-8 读取配置 (Windows 默认 GBK 会导致含中文/emoji 的 config 启动崩溃)
     env = dict(os.environ)
