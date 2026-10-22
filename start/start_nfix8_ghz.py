@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 启动 OKX NostalgiaForInfinityX8 (NFI X8) —— 跨平台后台启动器
 (参照 start_nfix7_demo.py 风格, 并适配 Linux 后台启动)
@@ -18,7 +19,7 @@
       python  start_nfix8_ghz.py start  -s x84
       python  start_nfix8_ghz.py stop   -s x84
       python  start_nfix8_ghz.py status -s x84
-  (Linux 用 python3; -s 也可直接跟在脚本后无需子命令: python3 start_nfix8_demo.py -s x8)
+  (Linux 用 python3; -s 也可直接跟在脚本后无需子命令: python3 start_nfix8_ghz.py -s x8)
 
 注意: 原版与 8020 子类共用同一 OKX 账户余额, 同时跑两个进程会相互竞争可用资金,
       建议二选一实盘, 或分别用小资金隔离验证。
@@ -291,8 +292,9 @@ def start_bot(strategy, short):
     cards_out = os.path.join(CONFIG_DIR, f"_config_with_cards_{short}.json")
     cfg_to_use = build_config(cfg, cards_out)
 
-    today = datetime.date.today().strftime("%Y-%m-%d")
-    logfile = os.path.join(LOG_DIR, f"freqtrade_{short}_{today}.log")
+    # 日志文件名不带日期, 由 TimedRotatingFileHandler 按天自动切割
+    # 归档格式: freqtrade_{short}.log.YYYY-MM-DD
+    logfile = os.path.join(LOG_DIR, f"freqtrade_{short}.log")
 
     py = find_pythonw()
     cmd = [
@@ -339,9 +341,9 @@ def start_bot(strategy, short):
     # 启动卡片由 freqtrade 自己发: rpc/webhook.py 已把多条 startup 合并成 1 条,
     # 故脚本不再重复发送, 否则飞书会收到 2 张启动卡
     if os.name == "nt":
-        print(f"[start_nfix8] 停止: python start_nfix8_demo.py stop -s {short}")
+        print(f"[start_nfix8] 停止: python start_nfix8_ghz.py stop -s {short}")
     else:
-        print(f"[start_nfix8] 停止: python3 start_nfix8_demo.py stop -s {short}   (或 kill -INT {proc.pid})")
+        print(f"[start_nfix8] 停止: python3 start_nfix8_ghz.py stop -s {short}   (或 kill -INT {proc.pid})")
 
 
 def stop_bot(short):
@@ -385,6 +387,24 @@ def status_bot(short):
         remove_pid(short)
 
 
+def _reboot_into_venv():
+    """自举: 若当前解释器不是项目 .venv, 则用 .venv 的解释器重新执行本脚本,
+    免去每次手动 `source .venv/bin/activate` (Linux) / `.venv\\Scripts\\activate` (Windows)。"""
+    if os.name == "nt":
+        venv_py = os.path.join(BASE, ".venv", "Scripts", "python.exe")
+    else:
+        venv_py = os.path.join(BASE, ".venv", "bin", "python")
+        if not os.path.exists(venv_py):
+            venv_py = os.path.join(BASE, ".venv", "bin", "python3")
+    if not os.path.exists(venv_py):
+        return  # 未创建 venv, 退回当前解释器
+    # 已在 venv 内则无需重复 reboot
+    if os.path.dirname(sys.executable) == os.path.dirname(venv_py):
+        return
+    print(f"[start_nfix8] 当前非 venv 解释器, 自动切换到: {venv_py}")
+    os.execv(venv_py, [venv_py, os.path.abspath(__file__)] + sys.argv[1:])
+
+
 def main():
     parser = argparse.ArgumentParser(description="启动 OKX NostalgiaForInfinityX8 (X8 原版 / 8020 子类) —— 跨平台后台启动器")
     sub = parser.add_subparsers(dest="cmd")
@@ -415,4 +435,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _reboot_into_venv()  # 不在 venv 时自动用 .venv 重跑本脚本, 免去手动 source
     main()

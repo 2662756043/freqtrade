@@ -174,11 +174,13 @@ def _create_log_config(config: Config) -> dict[str, Any]:
                 log_config["handlers"]["file"]["filename"] = logfile
             else:
                 log_config["handlers"]["file"] = {
-                    "class": "logging.handlers.RotatingFileHandler",
+                    "class": "logging.handlers.TimedRotatingFileHandler",
                     "formatter": "standard",
                     "filename": logfile,
-                    "maxBytes": 1024 * 1024 * 10,  # 10Mb
-                    "backupCount": 10,
+                    "when": "midnight",
+                    "interval": 1,
+                    "backupCount": 30,
+                    "encoding": "utf-8",
                 }
             _add_root_handler(log_config, "file")
 
@@ -186,7 +188,7 @@ def _create_log_config(config: Config) -> dict[str, Any]:
     for handler_config in log_config.get("handlers", {}).values():
         if handler_config.get("class") == "freqtrade.loggers.ft_rich_handler.FtRichHandler":
             handler_config["console"] = error_console
-        elif handler_config.get("class") == "logging.handlers.RotatingFileHandler":
+        elif handler_config.get("class") == "logging.handlers.TimedRotatingFileHandler":
             logfile_path = Path(handler_config["filename"])
             try:
                 # Create parent for filehandler
